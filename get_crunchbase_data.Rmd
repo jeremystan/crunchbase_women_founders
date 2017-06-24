@@ -44,8 +44,20 @@ founders <- relationships %>%
             by = c("relationship_object_id" = "id"))
 genders <- gender(founders$first_name %>% unique)
 founders <- founders %>%
-  left_join(genders %>% select(name, gender),
+  left_join(genders %>% select(name, gender, proportion_female),
             by = c("first_name" = "name"))
+```
+
+```{r}
+founders %>% 
+  mutate(confidence = ifelse(is.na(proportion_female), 'missing',
+                             ifelse(proportion_female > .95, 'female',
+                                    ifelse(proportion_female < .05, 'male',
+                                           'uncertain')))) %>%
+  group_by(confidence) %>%
+  tally %>%
+  ungroup %>%
+  mutate(pct = n / sum(n))
 ```
 
 ```{r}
