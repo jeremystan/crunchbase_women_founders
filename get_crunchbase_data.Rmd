@@ -1,0 +1,270 @@
+---
+title: "Get Crunchbase Data"
+output: html_document
+---
+
+```{r}
+needs(tidyverse, RMySQL, dbConnect, gender, lubridate, wordcloud, forcats,
+      viridis, stringr)
+```
+
+```{r}
+con <- dbConnect(MySQL(), user='root', dbname='mytestdatabase')
+```
+
+```{r}
+get_cb_data <- function(tbl, con, limit = NULL) {
+  sql <- "select * from %s" %>% sprintf(tbl)
+  if (!is.null(limit))
+    sql <- "%s limit %s" %>% sprintf(sql, limit)
+  dbGetQuery(con, sql) %>% tbl_df
+}
+
+limit <- NULL
+funding_rounds <- "cb_funding_rounds" %>% get_cb_data(con, limit)
+funds <- "cb_funds" %>% get_cb_data(con, limit)
+investments <- "cb_investments" %>% get_cb_data(con, limit)
+objects <- "cb_objects" %>% get_cb_data(con, limit)
+people <- "cb_people" %>% get_cb_data(con, limit)
+relationships <- "cb_relationships" %>% get_cb_data(con, limit)
+```
+
+```{r}
+objects %>% head
+```
+
+```{r}
+founders <- relationships %>%
+  select(person_object_id, relationship_object_id, title) %>%
+  filter(!is.na(str_match(title, '[fF]ounder'))) %>%
+  left_join(people %>% select(object_id, first_name),
+            by = c("person_object_id" = "object_id")) %>%
+  left_join(objects %>% filter(entity_type == 'Company') %>%
+              select(id, company = name, region, founded_at),
+            by = c("relationship_object_id" = "id"))
+genders <- gender(founders$first_name %>% unique)
+founders <- founders %>%
+  left_join(genders %>% select(name, gender),
+            by = c("first_name" = "name"))
+```
+
+```{r}
+df <- founders %>%
+  group_by(first_name, gender) %>%
+  tally %>%
+  mutate(color = ifelse(
+    is.na(gender), 'grey',
+    ifelse(gender == 'female', 'green', 'orange'))) %>%
+  ungroup %>%
+  arrange(desc(n)) %>%
+  slice(1:500) %>%
+  mutate(s = sqrt(n))
+r <- range(df$s)
+r <- r / max(r) * 1.5
+wordcloud(df$first_name, df$s, colors = df$color, 
+          ordered.colors = TRUE, random.order = FALSE,
+          scale = rev(r))
+```
+
+```{r}
+rounds <- funding_rounds %>%
+  transmute(funding_round_id, object_id, 
+            funding_date = as.Date(funded_at),
+            funding_year = year(as.Date(funded_at)),
+            funding_round_code) %>%
+  inner_join(investments %>% select(funding_round_id, investor_object_id),
+             by = "funding_round_id") %>%
+  inner_join(objects %>% filter(entity_type == 'FinancialOrg') %>%
+              select(id, investor = name),
+             by = c("investor_object_id" = "id"))
+```
+
+```{r}
+rounds %>%
+  filter(funding_year %in% 2009:2013) %>%
+  filter(funding_round_code %in% c("seed", "a", "b", "c")) %>%
+  select(object_id) %>%
+  unique %>% # dedupe over rounds
+  inner_join(founders %>% select(relationship_object_id, gender),
+            by = c("object_id" = "relationship_object_id")) %>%
+  filter(!is.na(gender)) %>%
+  summarize(
+    num_companies = n_distinct(object_id),
+    num_founders = n(),
+    pct_female = mean(gender == 'female') * 100
+  )
+```
+
+```{r, fig.height = 4, fig.width = 2}
+df <- rounds %>%
+  filter(funding_year %in% 2009:2013) %>%
+  filter(funding_round_code %in% c("seed", "a", "b", "c")) %>%
+  select(investor, object_id) %>%
+  unique %>% # dedupe over rounds
+  inner_join(founders %>% select(relationship_object_id, gender),
+            by = c("object_id" = "relationship_object_id")) %>%
+  filter(!is.na(gender)) %>%
+  group_by(investor) %>%
+  summarize(
+    num_companies = n_distinct(object_id),
+    num_founders = n(),
+    pct_female = mean(gender == 'female') * 100
+  )
+
+df %>% 
+  arrange(desc(num_companies)) %>%
+  slice(1:50) %>%
+  mutate(investor = fct_reorder(investor, pct_female)) %>%
+  ggplot(aes(investor, pct_female)) +
+    geom_bar(stat = 'identity') +
+    coord_flip() +
+    labs(y = "Percent Female Founders", x = "Investor")
+```
+
+```{r}
+df %>%
+  arrange(desc(num_companies)) %>%
+  slice(1:100) %>%
+  arrange(desc(pct_female)) %>%
+  mutate(investor = paste0(1:n(), ". ", investor)) %>%  
+  mutate(rank = 1:n()) %>%
+  mutate(column = (rank - 1) %/% 20 + 1) %>%
+  group_by(column) %>%
+  arrange(desc(pct_female)) %>%
+  mutate(col_rank = n():1) %>%
+  ggplot(aes(pct_female, col_rank)) +
+    geom_segment(aes(xend = 0, yend = col_rank), color = 'grey70') +
+    geom_point(aes(size = num_companies), color = 'grey70') +
+    geom_text(aes(x = 0, label = investor), adj = 0, nudge_y = .3, size = 3, color = 'grey20') +
+    facet_grid(. ~ column) +
+    theme(legend.position = 'none') +
+    theme(panel.background = element_blank(),
+          panel.border = element_blank(), 
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.line = element_blank()) +
+    labs(x = "Percent Female Founders")
+```
+
+```{r}
+df %>%
+  filter(num_companies >= 50) %>%
+  ggplot(aes(num_companies, pct_female)) +
+    geom_point()
+```
+```{r}
+df <- rounds %>%
+  filter(funding_year %in% 2009:2013) %>%
+  filter(funding_round_code %in% c("seed", "a", "b", "c")) %>%
+  select(object_id) %>%
+  unique %>% # dedupe over rounds
+  inner_join(founders %>% select(relationship_object_id, gender, region),
+            by = c("object_id" = "relationship_object_id")) %>%
+  filter(!is.na(gender)) %>%
+  group_by(region) %>%
+  summarize(
+    num_companies = n_distinct(object_id),
+    num_founders = n(),
+    pct_female = mean(gender == 'female') * 100
+  )
+
+df %>%
+  filter(region != 'unknown') %>%
+  arrange(desc(num_companies)) %>%
+  slice(1:15) %>%
+  ggplot(aes(num_companies, pct_female)) +
+    geom_point(aes(size = num_companies), colour = 'grey60') +
+    geom_text(aes(label = region), nudge_y = .5) +
+    scale_x_log10(lim = c(20, 1500)) +
+    annotation_logticks(side = 'b') +
+    theme(legend.position = 'none') +
+    labs(x = "Number of Companies", y = "Percent Female Founders")
+```
+
+```{r, fig.height = 1.5, fig.width = 1.5}
+df <- rounds %>%
+  filter(funding_year %in% 2009:2013) %>%
+  filter(funding_round_code %in% c("seed", "a", "b", "c")) %>%
+  mutate(round = factor(funding_round_code, levels = c("seed", "a", "b", "c"))) %>%
+  select(round, object_id) %>%
+  unique %>% # dedupe over rounds
+  inner_join(founders %>% select(relationship_object_id, gender),
+            by = c("object_id" = "relationship_object_id")) %>%
+  filter(!is.na(gender)) %>%
+  group_by(round) %>%
+  summarize(
+    num_companies = n_distinct(object_id),
+    num_founders = n(),
+    pct_female = mean(gender == 'female') * 100
+  )
+
+df %>%
+  ggplot(aes(round, pct_female)) +
+    geom_bar(stat = 'identity', fill = 'grey60') +
+    geom_text(aes(label = pct_female %>% round(1)), nudge_y = .5, colour = 'grey20', size = 3) +
+    geom_text(aes(label = round, y = 0), nudge_y = -.5, colour = 'grey20', size = 3) +
+    labs(x = "Funding Round", y = "Percent Female") +
+    theme_minimal() +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank())
+```
+
+```{r}
+df <- rounds %>%
+  filter(funding_year %in% 2009:2013) %>%
+  filter(funding_round_code %in% c("seed", "a", "b", "c")) %>%
+  mutate(round = factor(funding_round_code, levels = c("seed", "a", "b", "c"))) %>%
+  select(round, object_id) %>%
+  unique %>% # dedupe over rounds
+  inner_join(founders %>% select(relationship_object_id, founded_at, gender),
+            by = c("object_id" = "relationship_object_id")) %>%
+  mutate(founded_year = year(as.Date(founded_at))) %>%
+  filter(!is.na(gender)) %>%
+  group_by(founded_year, round) %>%
+  summarize(
+    num_companies = n_distinct(object_id),
+    num_founders = n(),
+    pct_female = mean(gender == 'female') * 100
+  )
+
+df %>%
+  filter(founded_year >= 2005) %>%
+  ggplot(aes(founded_year, pct_female, group = round, colour = round)) +
+    geom_point(aes(size = num_companies)) +
+    geom_line()
+```
+
+```{r}
+df <- rounds %>%
+  filter(funding_year %in% 2009:2013) %>%
+  filter(funding_round_code %in% c("seed", "a", "b", "c")) %>%
+  group_by(funding_date, object_id) %>%
+  unique %>% # dedupe over rounds
+  inner_join(founders %>% select(relationship_object_id, gender),
+            by = c("object_id" = "relationship_object_id")) %>%
+  filter(!is.na(gender)) %>%
+  mutate(
+    year = year(funding_date),
+    month = month(funding_date)
+  ) %>%
+  group_by(year, month) %>%
+  summarize(
+    num_companies = n_distinct(object_id),
+    num_founders = n(),
+    pct_female = mean(gender == 'female') * 100
+  )
+
+df %>%
+  ggplot(aes(month, pct_female, size = num_founders)) +
+    geom_point(colour = 'grey30') +
+    stat_smooth(se = FALSE, formula = y ~ 1, method = 'lm') +
+    labs(x = "Funding Month", y = "Percent Female Founders") +
+    facet_grid(. ~ year) +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank()) +
+    theme(legend.position = 'bottom') +
+    scale_y_continuous(lim = c(0, max(df$pct_female))) +
+    scale_x_continuous(breaks = 1:12) +
+    theme(axis.text.x = element_text(size = 6))
+```
