@@ -228,3 +228,40 @@ df %>%
     scale_x_continuous(breaks = 1:12) +
     theme(axis.text.x = element_text(size = 6))
 ```
+
+### Top and Bottom 10 VC name distributions
+
+```{r}
+top_invest <- df_100_vcs %>% arrange(desc(pct_female)) %>% slice(1:5) %>% pull(investor)
+bot_invest <- df_100_vcs %>% arrange(pct_female) %>% slice(1:5) %>% pull(investor)
+
+plot_invest_wordcloud <- function(cobined, invest, max_n) {
+
+  df <- combined %>%
+    filter(investor %in% invest) %>%
+    select(person_id, first_name, gender) %>%
+    unique %>% # dedupe over investors and rounds
+    group_by(first_name, gender) %>%
+    tally %>%
+    mutate(color = ifelse(
+      is.na(gender), 'grey',
+      ifelse(gender == 'female', 'green', 'orange'))) %>%
+    ungroup %>%
+    arrange(desc(n)) %>%
+    slice(1:500) %>%
+    mutate(s = sqrt(n))
+  
+  r <- range(df$s)
+  r <- r / sqrt(max_n) * 1.5
+  wordcloud(df$first_name, df$s, colors = df$color, 
+            ordered.colors = TRUE, random.order = FALSE,
+            scale = rev(r), min.freq = 0)
+}
+set.seed(1)
+opar <- par(mfrow = c(1, 2))
+plot_invest_wordcloud(combined, top_invest, 12)
+title("Top 5 VCs", adj = 0.4, col = 'grey60')
+plot_invest_wordcloud(combined, bot_invest, 15)
+title("Bottom 5 VCs", adj = 0.4, col = 'grey60')
+par(opar)
+```
