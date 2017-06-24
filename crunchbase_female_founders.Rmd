@@ -100,6 +100,67 @@ combined %>%
   )
 ```
 
+### Number of female founders
+
+```{r}
+combined %>%
+  filter(!is.na(gender)) %>%
+  select(person_id, gender) %>%
+  unique %>%
+  group_by(gender) %>%
+  tally
+```
+
+### Tags
+
+```{r}
+tags <- combined %>%
+  filter(!is.na(gender)) %>%
+  mutate(is_female = gender == 'female') %>%
+  group_by(company_id, tag_list) %>%
+  summarize(any_female = any(is_female)) %>%
+  filter(!is.na(tag_list))
+  
+split_tags <- function(s) data_frame(tag = str_split(s, ', ')[[1]])
+
+tags <- tags %>%
+  mutate(tags = tag_list %>% map(split_tags)) %>%
+  select(-tag_list) %>%
+  unnest(tags)
+
+tags %>%
+  filter(tag != '' & !is.na(tag)) %>%
+  group_by(tag) %>%
+  summarize(
+    num_companies = n(),
+    pct_any_female = mean(any_female) * 100) %>%
+  arrange(desc(num_companies)) %>%
+  slice(1:50) %>%
+  mutate(tag = tag %>% fct_reorder(pct_any_female)) %>%
+  ggplot(aes(pct_any_female, tag)) +
+    geom_segment(aes(xend = 0, yend = tag), colour = 'grey80', alpha = .8) +
+    geom_point(aes(size = num_companies), colour = 'grey20', alpha = .8) +
+    labs(x = "Percent Any Women Founder", y = "Crunchbase Tag",
+         size = "Number of\nCompanies") +
+    theme_minimal() +
+    theme(panel.background = element_blank(),
+          panel.border = element_blank(), 
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.line = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 60, by = 5))
+```
+
+### Number of investments in female founders
+
+```{r}
+combined %>%
+  filter(gender == 'female') %>%
+  summarize_gender() 
+
+combined %>% summarize_gender()
+```
+
 ### VC
 
 ```{r, fig.height = 5, fig.width = 8}
@@ -260,8 +321,8 @@ plot_invest_wordcloud <- function(cobined, invest, max_n) {
 set.seed(1)
 opar <- par(mfrow = c(1, 2))
 plot_invest_wordcloud(combined, top_invest, 12)
-title("Top 5 VCs", adj = 0.4, col = 'grey60')
+title("Top 5 VCs", adj = 0.4)
 plot_invest_wordcloud(combined, bot_invest, 15)
-title("Bottom 5 VCs", adj = 0.4, col = 'grey60')
+title("Bottom 5 VCs", adj = 0.4)
 par(opar)
 ```

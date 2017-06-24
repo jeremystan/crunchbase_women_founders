@@ -29,7 +29,7 @@ assemble_founders_data <- function(relationships, people, objects) {
     left_join(people %>% select(object_id, first_name),
               by = c("person_object_id" = "object_id")) %>%
     left_join(objects %>% filter(entity_type == 'Company') %>%
-                select(id, company = name, region, founded_at),
+                select(id, company = name, region, founded_at, tag_list),
               by = c("relationship_object_id" = "id"))
 
   # Compute gender data for all first names
